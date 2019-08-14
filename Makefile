@@ -24,6 +24,8 @@ load:
 unload:
 	sudo rmmod $(TARGET_MODULE) || true >/dev/null
 
+plot:
+	gnuplot -p -c execution_time.gp
 client: client.c
 	$(CC) -o $@ $^
 
