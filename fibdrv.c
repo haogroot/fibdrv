@@ -7,6 +7,8 @@
 #include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/slab.h>
+#include <linux/string.h>
 #include <linux/uaccess.h>
 #include <uapi/linux/time.h>
 
@@ -17,31 +19,124 @@ MODULE_VERSION("0.1");
 
 #define DEV_FIBONACCI_NAME "fibonacci"
 
-/* MAX_LENGTH is set to 92 because
- * ssize_t can't fit the number > 92
- */
-#define MAX_LENGTH 92
+#define MAX_LENGTH 100
 
 static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
-static char kbuffer[100];
+static char kbuffer[176];
+#define WORD_SIZE 4
+#define ARR_SIZE 3
+#define DTYPE unsigned int
+#define BIGGER_DTYPE unsigned long
+#define MAX_VAL 0xffffffff
+struct bn {
+    // each element is 32 bits size
+    DTYPE array[ARR_SIZE];
+};
 
-static long long fib_sequence(long long k)
+void bignum_init(struct bn *num)
 {
-    /* FIXME: use clz/ctz and fast algorithms to speed up */
-    long long f[k + 2];
+    int i;
+    for (i = 0; i < ARR_SIZE; ++i) {
+        num->array[i] = 0;
+    }
+}
 
-    f[0] = 0;
-    f[1] = 1;
+void bignum_from_int(struct bn *num, BIGGER_DTYPE i)
+{
+    bignum_init(num);
+    num->array[0] = i;
+    BIGGER_DTYPE num_32 = 32;
+    BIGGER_DTYPE tmp = i >> num_32;
+    num->array[1] = tmp;
+}
 
-    for (int i = 2; i <= k; i++) {
-        f[i] = f[i - 1] + f[i - 2];
+void bignum_add(struct bn *input_a, struct bn *input_b, struct bn *output)
+{
+    int carry = 0;
+    int i;
+
+    for (i = 0; i < ARR_SIZE; ++i) {
+        BIGGER_DTYPE tmp =
+            (BIGGER_DTYPE) input_a->array[i] + input_b->array[i] + carry;
+        carry = (tmp > MAX_VAL);
+        output->array[i] = (tmp & MAX_VAL);
+    }
+}
+
+void bignum_copy(struct bn *src, struct bn *dst)
+{
+    int i;
+    for (i = 0; i < ARR_SIZE; i++) {
+        dst->array[i] = src->array[i];
+    }
+}
+
+/* convert bignum array to hex string */
+void bignum_to_string(struct bn *num, char *str, int nbytes)
+{
+    int j = ARR_SIZE - 1; /* index into array */
+    int i = 0;            /* index into string */
+    /* nbytes needs to be multiples of 8 */
+    while ((j >= 0) && (nbytes > (i + 1))) {
+        snprintf(&str[i], (2 * WORD_SIZE) + 1, "%08x", num->array[j]);
+        i += (2 * WORD_SIZE); /* step 8 bytes forward in the string. */
+        j -= 1;               /* step one element back in the array. */
     }
 
-    return f[k];
+    /* Count leading zeros: */
+    j = 0;
+    while (str[j] == '0') {
+        j += 1;
+    }
+    /* Move string j places ahead, effectively skipping leading zeros */
+    for (i = 0; i < (nbytes - j); i++) {
+        str[i] = str[i + j];
+    }
+    /* Zero-terminate string */
+    str[i] = 0;
 }
+
+static long long fib_sequence(int k, char *buf)
+{
+    /* FIXME: use clz/ctz and fast algorithms to speed up */
+    struct bn pre_previous, previous, curr;
+    bignum_from_int(&pre_previous, 0);
+    bignum_from_int(&previous, 1);
+    bignum_init(&curr);
+
+    if (k == 0) {
+        kbuffer[8] = (char) pre_previous.array[0] + 48;
+        kbuffer[9] = 0;
+        return 1;
+    }
+    if (k == 1) {
+        kbuffer[8] = (char) previous.array[0] + 48;
+        kbuffer[9] = 0;
+        return 1;
+    }
+
+    for (int i = 2; i <= k; i++) {
+        bignum_add(&pre_previous, &previous, &curr);
+
+        bignum_copy(&previous, &pre_previous);
+        bignum_copy(&curr, &previous);
+    }
+    char hex_buf[168];
+    bignum_to_string(&curr, hex_buf, sizeof(hex_buf));
+
+    /* Convert retval to char type and put into kbuffer. */
+    for (int i = 0; i < 168; i++) {
+        kbuffer[i + 8] = hex_buf[i];
+        if (hex_buf[i] == 0) {
+            return i;
+        }
+    }
+    return 0;
+}
+
 
 static int fib_open(struct inode *inode, struct file *file)
 {
@@ -68,10 +163,10 @@ static ssize_t fib_read(struct file *file,
     ssize_t retval;
 
     kt = ktime_get();
-    retval = (ssize_t) fib_sequence(*offset);
+    retval = fib_sequence(*offset, kbuffer);
     kt = ktime_sub(ktime_get(), kt);
     snprintf(kbuffer, sizeof(kbuffer), "%lld\n", kt);
-    copy_to_user(buf, kbuffer, 100);
+    copy_to_user(buf, kbuffer, retval + 9);
 
     return retval;
 }

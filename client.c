@@ -16,9 +16,8 @@ int main()
     clockid_t cid = 1;
     struct timespec start, end;
 
-    char buf[1];
     char write_buf[] = "testing writing";
-    int offset = 92;  // TODO: test something bigger than the limit
+    int offset = 100;
     int i = 0;
 
     fd = open(FIB_DEV, O_RDWR);
@@ -36,32 +35,52 @@ int main()
 
     char buffer[300];
     char kbuffer[300];
-
     for (i = 0; i <= offset; i++) {
         lseek(fd, i, SEEK_SET);
 
         clock_gettime(cid, &start);
-        sz = read(fd, kbuffer, 1);
+        sz = read(fd, kbuffer, 50);
+
         clock_gettime(cid, &end);
         long int sec, nanosec;
         sec = end.tv_sec - start.tv_sec;
         nanosec = end.tv_nsec - start.tv_nsec;
+
+        char time[8];
+        memcpy(time, kbuffer, 8);
         snprintf(buffer, 300, "%d %ld %ld\n", i, sec * 1000000000 + nanosec,
-                 atol(kbuffer));
+                 atol(time));
         write(fd_out, buffer, strlen(buffer));
-        printf("Reading from " FIB_DEV
-               " at offset %d, returned the sequence "
-               "%lld.\n",
-               i, sz);
+        printf("Reading from " FIB_DEV " at offset %d, returned the sequence ",
+               i);
+
+        int j = 0;
+        while (1) {
+            if (kbuffer[8 + j] == 0) {
+                break;
+            }
+            printf("%c", kbuffer[8 + j]);
+            j++;
+        }
+
+        printf(".\n");
     }
 
     for (i = offset; i >= 0; i--) {
         lseek(fd, i, SEEK_SET);
-        sz = read(fd, buf, 1);
-        printf("Reading from " FIB_DEV
-               " at offset %d, returned the sequence "
-               "%lld.\n",
-               i, sz);
+        sz = read(fd, kbuffer, 50);
+        printf("Reading from " FIB_DEV " at offset %d, returned the sequence ",
+               i);
+        int j = 0;
+        while (1) {
+            if (kbuffer[8 + j] == 0) {
+                break;
+            }
+            printf("%c", kbuffer[8 + j]);
+            j++;
+        }
+
+        printf(".\n");
     }
 
     close(fd);
