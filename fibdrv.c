@@ -30,7 +30,7 @@ static char kbuffer[176];
 #define ARR_SIZE 3
 #define DTYPE unsigned int
 #define BIGGER_DTYPE unsigned long
-#define MAX_VAL 0xffffffff
+#define MAX_VAL (BIGGER_DTYPE) 0xffffffff
 struct bn {
     // each element is 32 bits size
     DTYPE array[ARR_SIZE];
@@ -51,6 +51,10 @@ void bignum_from_int(struct bn *num, BIGGER_DTYPE i)
     BIGGER_DTYPE num_32 = 32;
     BIGGER_DTYPE tmp = i >> num_32;
     num->array[1] = tmp;
+    int j;
+    for (j = 2; j < ARR_SIZE; j++) {
+        num->array[j] = 0;
+    }
 }
 
 void bignum_add(struct bn *input_a, struct bn *input_b, struct bn *output)
@@ -63,6 +67,58 @@ void bignum_add(struct bn *input_a, struct bn *input_b, struct bn *output)
             (BIGGER_DTYPE) input_a->array[i] + input_b->array[i] + carry;
         carry = (tmp > MAX_VAL);
         output->array[i] = (tmp & MAX_VAL);
+    }
+}
+
+void bignum_sub(struct bn *input_a, struct bn *input_b, struct bn *output)
+{
+    int borrow = 0;
+    int i;
+    for (i = 0; i < ARR_SIZE; i++) {
+        /* Borrow a higher byte */
+        BIGGER_DTYPE tmp1 = (BIGGER_DTYPE) input_a->array[i] + (MAX_VAL + 1);
+        BIGGER_DTYPE tmp2 = (BIGGER_DTYPE) input_b->array[i] + borrow;
+        BIGGER_DTYPE sub_result = tmp1 - tmp2;
+        output->array[i] = (DTYPE)(sub_result & MAX_VAL);
+        borrow = (sub_result <= MAX_VAL);
+    }
+}
+
+void _lshift_word(struct bn *a, int nwords)
+{
+    int i;
+    /* Shift whole words */
+    for (i = ARR_SIZE - 1; i >= nwords; --i) {
+        a->array[i] = a->array[i - nwords];
+    }
+    /* Zero pad shifted words */
+    for (; i >= 0; --i) {
+        a->array[i] = 0;
+    }
+}
+
+void bignum_mul(struct bn *input_a, struct bn *input_b, struct bn *output)
+{
+    struct bn row;
+    struct bn tmp;
+    int i, j;
+    bignum_init(output);
+    for (i = 0; i < ARR_SIZE; i++) {
+        if (input_a->array[i] != 0) {
+            bignum_init(&row);
+            for (j = 0; j < ARR_SIZE; j++) {
+                if (i + j < ARR_SIZE && input_b->array[j] != 0) {
+                    bignum_init(&tmp);
+                    BIGGER_DTYPE mul_result = (BIGGER_DTYPE) input_a->array[i] *
+                                              (BIGGER_DTYPE) input_b->array[j];
+                    bignum_from_int(&tmp, mul_result);
+
+                    _lshift_word(&tmp, i + j);
+                    bignum_add(&tmp, &row, &row);
+                }
+            }
+            bignum_add(output, &row, output);
+        }
     }
 }
 
@@ -99,36 +155,51 @@ void bignum_to_string(struct bn *num, char *str, int nbytes)
     str[i] = 0;
 }
 
-static long long fib_sequence(int k, char *buf)
+
+static int fib_sequence_fast_doubling(int k)
 {
-    /* FIXME: use clz/ctz and fast algorithms to speed up */
-    struct bn pre_previous, previous, curr;
-    bignum_from_int(&pre_previous, 0);
-    bignum_from_int(&previous, 1);
-    bignum_init(&curr);
-
+    struct bn t0, t1, t3, t4;
+    bignum_from_int(&t0, 1);
+    bignum_from_int(&t1, 1);
+    bignum_from_int(&t3, 1);
+    bignum_init(&t4);
+    struct bn tmp, tmp2;
     if (k == 0) {
-        kbuffer[8] = (char) pre_previous.array[0] + 48;
+        kbuffer[8] = 48;
         kbuffer[9] = 0;
         return 1;
     }
-    if (k == 1) {
-        kbuffer[8] = (char) previous.array[0] + 48;
-        kbuffer[9] = 0;
-        return 1;
+    int i = 1;
+    while (i < k) {
+        if ((i << 1) <= k) {
+            /* t4 = t1 * t1 + t0 * t0 */
+            bignum_mul(&t1, &t1, &t4);
+            bignum_mul(&t0, &t0, &tmp);
+            bignum_add(&t4, &tmp, &t4);
+            /* t3 = t0 * (2 * t1 - t0) */
+            bignum_from_int(&tmp, 2);
+            bignum_mul(&tmp, &t1, &tmp2);
+            bignum_sub(&tmp2, &t0, &tmp2);
+            bignum_mul(&t0, &tmp2, &t3);
+            /* t0 = t3 */
+            bignum_copy(&t3, &t0);
+            /* t1 = t4 */
+            bignum_copy(&t4, &t1);
+            i = i << 1;
+        } else {
+            /* t0 = t3 */
+            bignum_copy(&t3, &t0);
+            /* t3 = t4 */
+            bignum_copy(&t4, &t3);
+            /* t4 = t0 + t4 */
+            bignum_add(&t4, &t0, &t4);
+            i++;
+        }
     }
-
-    for (int i = 2; i <= k; i++) {
-        bignum_add(&pre_previous, &previous, &curr);
-
-        bignum_copy(&previous, &pre_previous);
-        bignum_copy(&curr, &previous);
-    }
-    char hex_buf[168];
-    bignum_to_string(&curr, hex_buf, sizeof(hex_buf));
-
-    /* Convert retval to char type and put into kbuffer. */
-    for (int i = 0; i < 168; i++) {
+    /* return t3; */
+    char hex_buf[40];
+    bignum_to_string(&t3, hex_buf, sizeof(hex_buf));
+    for (i = 0; i < 40; i++) {
         kbuffer[i + 8] = hex_buf[i];
         if (hex_buf[i] == 0) {
             return i;
@@ -136,7 +207,6 @@ static long long fib_sequence(int k, char *buf)
     }
     return 0;
 }
-
 
 static int fib_open(struct inode *inode, struct file *file)
 {
@@ -163,7 +233,7 @@ static ssize_t fib_read(struct file *file,
     ssize_t retval;
 
     kt = ktime_get();
-    retval = fib_sequence(*offset, kbuffer);
+    retval = fib_sequence_fast_doubling(*offset);
     kt = ktime_sub(ktime_get(), kt);
     snprintf(kbuffer, sizeof(kbuffer), "%lld\n", kt);
     copy_to_user(buf, kbuffer, retval + 9);
