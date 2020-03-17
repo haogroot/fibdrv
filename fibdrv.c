@@ -155,51 +155,50 @@ void bignum_to_string(struct bn *num, char *str, int nbytes)
     str[i] = 0;
 }
 
-
-static int fib_sequence_fast_doubling(int k)
+static int fib_sequence_fast_doubling_highest_bit(int k)
 {
-    struct bn t0, t1, t3, t4;
-    bignum_from_int(&t0, 1);
-    bignum_from_int(&t1, 1);
-    bignum_from_int(&t3, 1);
-    bignum_init(&t4);
-    struct bn tmp, tmp2;
     if (k == 0) {
         kbuffer[8] = 48;
         kbuffer[9] = 0;
         return 1;
     }
-    int i = 1;
-    while (i < k) {
-        if ((i << 1) <= k) {
-            /* t4 = t1 * t1 + t0 * t0 */
-            bignum_mul(&t1, &t1, &t4);
-            bignum_mul(&t0, &t0, &tmp);
-            bignum_add(&t4, &tmp, &t4);
-            /* t3 = t0 * (2 * t1 - t0) */
-            bignum_from_int(&tmp, 2);
-            bignum_mul(&tmp, &t1, &tmp2);
-            bignum_sub(&tmp2, &t0, &tmp2);
-            bignum_mul(&t0, &tmp2, &t3);
-            /* t0 = t3 */
-            bignum_copy(&t3, &t0);
-            /* t1 = t4 */
-            bignum_copy(&t4, &t1);
-            i = i << 1;
+    /* Calculate the position of the highest bit of n */
+    unsigned int h = 0;
+    h = (WORD_SIZE * 8) - __builtin_clz(k);
+
+    struct bn a, b, c, d;
+    bignum_init(&a);
+    bignum_from_int(&b, 1);
+
+    for (int j = h - 1; j >= 0; j--) {
+        /* c = a * (2 * b - a) */
+        struct bn tmp, tmp2;
+        bignum_from_int(&tmp, 2);
+        bignum_init(&tmp2);
+        bignum_mul(&tmp, &b, &tmp2);
+        bignum_sub(&tmp2, &a, &tmp);
+        bignum_mul(&tmp, &a, &c);
+        /* d = a * a + b * b */
+        bignum_mul(&a, &a, &tmp);
+        bignum_mul(&b, &b, &tmp2);
+        bignum_add(&tmp, &tmp2, &d);
+
+        if ((k >> j) & 1) {
+            /* a = d */
+            bignum_copy(&d, &a);
+            /* b = c + d */
+            bignum_add(&c, &d, &b);
         } else {
-            /* t0 = t3 */
-            bignum_copy(&t3, &t0);
-            /* t3 = t4 */
-            bignum_copy(&t4, &t3);
-            /* t4 = t0 + t4 */
-            bignum_add(&t4, &t0, &t4);
-            i++;
+            /* a = c */
+            bignum_copy(&c, &a);
+            /* b = d */
+            bignum_copy(&d, &b);
         }
     }
-    /* return t3; */
+    /* return a */
     char hex_buf[40];
-    bignum_to_string(&t3, hex_buf, sizeof(hex_buf));
-    for (i = 0; i < 40; i++) {
+    bignum_to_string(&a, hex_buf, sizeof(hex_buf));
+    for (int i = 0; i < 40; i++) {
         kbuffer[i + 8] = hex_buf[i];
         if (hex_buf[i] == 0) {
             return i;
@@ -233,7 +232,7 @@ static ssize_t fib_read(struct file *file,
     ssize_t retval;
 
     kt = ktime_get();
-    retval = fib_sequence_fast_doubling(*offset);
+    retval = fib_sequence_fast_doubling_highest_bit(*offset);
     kt = ktime_sub(ktime_get(), kt);
     snprintf(kbuffer, sizeof(kbuffer), "%lld\n", kt);
     copy_to_user(buf, kbuffer, retval + 9);
