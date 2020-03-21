@@ -8,7 +8,7 @@
 
 #define FIB_DEV "/dev/fibonacci"
 
-int main()
+int main(int argc, char *argv[])
 {
     int fd, fd_out;
     long long sz;
@@ -21,7 +21,7 @@ int main()
     int i = 0;
 
     fd = open(FIB_DEV, O_RDWR);
-    fd_out = open("client_output.txt", O_RDWR | O_CREAT | O_TRUNC, 644);
+    fd_out = open(argv[1], O_RDWR | O_CREAT | O_TRUNC, 644);
 
     if (fd < 0) {
         perror("Failed to open character device");

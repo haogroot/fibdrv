@@ -41,3 +41,18 @@ check: all
 	$(MAKE) unload
 	@diff -u out scripts/expected.txt && $(call pass)
 	@scripts/verify.py
+
+profile: all
+	-rm -rf result/
+	mkdir -p result
+	number=1 ; while [ $$number -le 50 ] ; do \
+		$(MAKE) unload ; \
+		$(MAKE) load ; \
+		REPORT="result/test_$$number.txt" ; \
+		sudo taskset -c 1 chrt -f 90 ./client $$REPORT >/dev/null 2>&1 ; \
+		$(MAKE) unload ; \
+		number=`expr $$number + 1` ; \
+	done
+	scripts/outlier.py
+	gnuplot -p -c confidence_interval.gp
+
